@@ -1,13 +1,15 @@
 from datetime import datetime
 
 import requests
-from PyQt5.QtCore import QTimer
-
+from qtpy.QtCore import QTimer
 from qtpy.QtGui import QIcon
+from qtpy.QtWidgets import QInputDialog
 
 from xicam.core import msg
 from xicam.plugins.settingsplugin import ParameterSettingsPlugin
 from xicam.gui.static import path
+
+from xicam.Acquire.runengine import get_run_engine
 
 
 api_base = 'https://experiment-staging.als.lbl.gov/'
@@ -19,18 +21,22 @@ class ALSHubSettingsPlugin(ParameterSettingsPlugin):
 
     def __init__(self):
         self.query_timer = QTimer()
-        self.query_timer.setInterval(1e3*10)  # 10 minutes
+        self.query_timer.setInterval(int(1e3*10*60))  # 10 minutes
         self.query_timer.timeout.connect(self.check_event)
+
+        user_email, accepted = QInputDialog.getText(None, 'User Email', 'Please enter the email address associated with your ALSHub account.')
+        if not accepted:
+            user_email = ''
 
         super(ALSHubSettingsPlugin, self).__init__(
             QIcon(str(path("icons/als.png"))),
             'ALSHub',
             [
                 dict(
-                name="Endstation",
-                value='7.0.1.1',
-                type="str",
-                tip='The endstation numeral name (i.e. "7.0.1.1").',
+                    name="Endstation",
+                    value='7.0.1.1',
+                    type="str",
+                    tip='The endstation numeral name (i.e. "7.0.1.1").',
                 ),
                 dict(
                     name="PI email address",
@@ -45,12 +51,12 @@ class ALSHubSettingsPlugin(ParameterSettingsPlugin):
                     value=True,
                     type="bool",
                     tip="When enabled, the PI will be determined automatically using ALS Hub's ESAF database.",
-                    readonly=True,
+                    # readonly=True,
                 ),
                 # Allow users to configure the default log level for the xicam logger's StreamHandler
                 dict(
                     name="User email address",
-                    value='',
+                    value=user_email,
                     type="str",
                     tip="Your email address, associated with your ALSHub account.",
 
@@ -58,12 +64,24 @@ class ALSHubSettingsPlugin(ParameterSettingsPlugin):
             ],
         )
 
+        self.child('Set PI automatically').sigValueChanged.connect(self.update_readonly)
+
+        self.check_event()
+
+        get_run_engine().subscribe_kwargs_callable(self.to_kwargs)
+
+    def update_readonly(self, param, readonly):
+        self.child('PI email address').setOpts(readonly=readonly)
+        if readonly:
+            self.check_event()
+
     def apply(self):
         if self["Set PI automatically"]:
             self.query_timer.timeout.emit()
             self.query_timer.start()
         else:
             self.query_timer.stop()
+        super(ALSHubSettingsPlugin, self).apply()
 
     def check_event(self):
         if self["Set PI automatically"]:
@@ -91,3 +109,10 @@ class ALSHubSettingsPlugin(ParameterSettingsPlugin):
 
         finally:
             return None
+
+    def to_kwargs(self):
+        return {'PI': self["PI email address"], 'PI overridden': not self["Set PI automatically"], 'User': self['User email address']}
+
+    def fromState(self, state):
+        del state['children']['User email address']  # Never restore this from state
+        super(ALSHubSettingsPlugin, self).fromState(state)
